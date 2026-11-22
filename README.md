@@ -160,20 +160,85 @@ python3 main.py
 
 The downloaded files will be saved in the `Downloads` directory.
 
-## Comic File Generation
+## Comic & Volume File Generation
 
-This tool includes a feature to generate comic files from downloaded manga chapters. Supported formats are PDF and CBZ.
-You can use the `--format` argument from the command line to select the desired output format.
+This tool includes functionality to generate comic files (PDF and CBZ) from downloaded manga, both during download and for already downloaded manga.
 
-### Usage
+### Converting Already Downloaded Manga (Volumes & Chapters)
 
-To generate PDF files for the downloaded manga, run the following command:
+You can convert any manga present in the `Downloads/` directory into volume PDFs or CBZs using `generate_volume_pdfs.py` (or `convert_to_pdf.py`).
+
+The script automatically detects the directory structure:
+- **Volume folders already present**: Converts each volume folder into a volume PDF.
+- **Chapter folders**: Automatically groups chapters into volumes (default: 10 chapters per volume, or uses custom/predefined volume mappings).
+- **Loose images**: Compiles images into a single comic file.
+
+#### Basic Usage (Convert everything in `Downloads/`)
+
+```bash
+python3 generate_volume_pdfs.py
+```
+
+#### Advanced Options
+
+- **Specify chapters per volume:**
+  ```bash
+  python3 generate_volume_pdfs.py --chapters-per-volume 10
+  ```
+
+- **Convert a specific manga only:**
+  ```bash
+  python3 generate_volume_pdfs.py --manga "MangaName"
+  ```
+
+- **Select conversion mode:**
+  - `--mode auto` (default): Groups chapters into volumes or converts volume folders.
+  - `--mode chapters`: Generates a separate PDF/CBZ for each chapter.
+  - `--mode single`: Combines the entire manga into one single PDF/CBZ.
+  - `--mode volumes`: Groups into volumes.
+  ```bash
+  python3 generate_volume_pdfs.py --mode chapters
+  ```
+
+- **Output format (PDF or CBZ):**
+  ```bash
+  python3 generate_volume_pdfs.py --format cbz
+  ```
+
+- **Real-time download monitor:**
+  Continuously monitors downloads in progress and generates volume files as soon as each volume completes:
+  ```bash
+  python3 generate_volume_pdfs.py --monitor
+  ```
+
+- **Custom volume mapping file (JSON):**
+  If you have specific chapter-to-volume ranges for a manga, pass a JSON file:
+  ```bash
+  python3 generate_volume_pdfs.py --mapping-file custom_mapping.json
+  ```
+  *Example `custom_mapping.json`:*
+  ```json
+  {
+    "my-manga": [
+      [1, 1, 10],
+      [2, 11, 20]
+    ]
+  }
+  ```
+
+### Converting During Download
+
+To generate PDF files automatically during download, use `--format pdf` with `main.py` or `manga_downloader.py`:
 
 ```bash
 python3 main.py --format pdf
 ```
 
-This will create PDF files for each chapter and save them in the specified output directory. The generated PDFs maintain the original quality of the downloaded images and are optimized for readability.
+Or for a single manga:
+
+```bash
+python3 manga_downloader.py <manga_url> --format pdf
+```
 
 ## Logging
 
