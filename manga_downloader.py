@@ -55,10 +55,11 @@ def process_comic_generation(
 
 def download_chapter_with_progress(
     manga_name: str,
-    download_links: list[str],
-    pages_per_chapter: list[int],
+    download_links: list,
+    pages_per_chapter: list[int] | None = None,
     output_format: str | None = None,
     volume_name: str | None = None,
+    chapter_start_index: int = 1,
 ) -> None:
     """Download the chapters of a manga and displays a progress bar.
 
@@ -79,6 +80,7 @@ def download_chapter_with_progress(
             job_progress,
             pages_per_chapter,
             working_path,
+            chapter_start_index,
         )
         if output_format:
             single_file = volume_name is not None
@@ -99,24 +101,9 @@ async def process_volume(
     manga_name, manga_type = manga_info
     chapter_urls = [chapter["url"] for chapter in volume["chapters"]]
 
-    async with aiohttp.ClientSession() as session:
-        tasks = [fetch_chapter_data(url, session) for url in chapter_urls]
-        results = await asyncio.gather(*tasks)
-
-    pages_per_chapter = [
-        result[1] if result and result[1] else None for result in results
-    ]
-    download_links = await extract_download_links(
-        chapter_urls,
-        0,
-        len(chapter_urls),
-        manga_type,
-    )
-
     download_chapter_with_progress(
         manga_name,
-        download_links,
-        pages_per_chapter,
+        chapter_urls,
         output_format=output_format,
         volume_name=volume["name"],
     )
@@ -178,23 +165,18 @@ async def process_manga_download(
         )
 
     else:
-        chapter_urls, pages_per_chapter = await extract_chapters_info(soup)
+        chapter_urls, _ = await extract_chapters_info(soup)
         start_chapter, end_chapter = validate_index_range(
             start_index,
             end_index,
             length=len(chapter_urls),
         )
-        download_links = await extract_download_links(
-            chapter_urls,
-            start_chapter,
-            end_chapter,
-            manga_type,
-        )
+        selected_urls = chapter_urls[start_chapter:end_chapter]
         download_chapter_with_progress(
             manga_name,
-            download_links,
-            pages_per_chapter[start_index:end_index],
+            selected_urls,
             output_format=output_format,
+            chapter_start_index=start_chapter + 1,
         )
 
 
