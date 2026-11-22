@@ -34,7 +34,7 @@ from .config import (
 from .general_utils import check_real_page
 
 
-async def fetch_chapter_images(
+async def fetch_chapter_images(  # pylint: disable=too-many-locals
     chapter_url: str,
     session: ClientSession,
     manga_type: str | None = None,

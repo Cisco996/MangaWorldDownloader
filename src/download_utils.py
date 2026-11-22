@@ -198,7 +198,7 @@ def get_images_from_chapter_url(chapter_url: str) -> list[str]:
     return []
 
 
-def download_chapter(
+def download_chapter(  # pylint: disable=too-many-locals
     item_info: tuple,
     pages_per_chapter: list | None,
     manga_name: str,
@@ -242,11 +242,12 @@ def download_chapter(
     else:
         # Legacy fallback
         base_download_link = chapter_content
-        num_pages = (
-            int(pages_per_chapter[indx_chapter])
-            if pages_per_chapter and indx_chapter < len(pages_per_chapter) and pages_per_chapter[indx_chapter]
-            else 0
+        has_page_count = (
+            pages_per_chapter
+            and indx_chapter < len(pages_per_chapter)
+            and bool(pages_per_chapter[indx_chapter])
         )
+        num_pages = int(pages_per_chapter[indx_chapter]) if has_page_count else 0
         for page in range(1, num_pages + 1):
             success = attempt_download_page(page, base_download_link, download_path)
             if not success:

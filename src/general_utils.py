@@ -65,7 +65,8 @@ async def fetch_page(url: str, timeout: int = TIMEOUT, retries: int = 3) -> Beau
     async with aiohttp.ClientSession(headers=FETCH_HEADERS) as session:
         for attempt in range(retries):
             try:
-                async with session.get(url, timeout=aiohttp.ClientTimeout(total=timeout)) as response:
+                timeout_cfg = aiohttp.ClientTimeout(total=timeout)
+                async with session.get(url, timeout=timeout_cfg) as response:
                     html = await response.text()
                     parsed_response = BeautifulSoup(html, "html.parser")
 
@@ -115,5 +116,5 @@ def clear_terminal() -> None:
     if command:
         try:
             subprocess.run(command, shell=True, check=False)  # noqa: S603
-        except Exception:
+        except Exception:  # pylint: disable=broad-exception-caught
             pass

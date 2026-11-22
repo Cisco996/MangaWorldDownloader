@@ -1,0 +1,10 @@
+[MAIN]
+fail-under = 9.0
+
+[MESSAGES CONTROL]
+disable =
+    duplicate-code,
+    fixme
+
+[FORMAT]
+max-line-length = 100

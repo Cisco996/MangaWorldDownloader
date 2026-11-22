@@ -10,17 +10,14 @@ import asyncio
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-import aiohttp
 from rich.live import Live
 
 from src.comic_generator import generate_comic_files
 from src.config import DOWNLOAD_FOLDER, parse_arguments
 from src.crawler_utils import (
     extract_chapters_info,
-    extract_download_links,
     extract_manga_type,
     extract_volume_info,
-    fetch_chapter_data,
 )
 from src.download_utils import download_chapter, run_in_parallel
 from src.format_utils import extract_manga_info
@@ -53,7 +50,7 @@ def process_comic_generation(
     )
 
 
-def download_chapter_with_progress(
+def download_chapter_with_progress(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     manga_name: str,
     download_links: list,
     pages_per_chapter: list[int] | None = None,
@@ -98,7 +95,7 @@ async def process_volume(
     output_format: str | None = None,
 ) -> None:
     """Process and downloads a single volume."""
-    manga_name, manga_type = manga_info
+    manga_name, _ = manga_info
     chapter_urls = [chapter["url"] for chapter in volume["chapters"]]
 
     download_chapter_with_progress(

@@ -8,11 +8,12 @@ properly ordered PDF or CBZ files.
 Works seamlessly on Windows, macOS, and Linux.
 """
 
+# pylint: disable=too-many-arguments,too-many-locals,too-many-branches,too-many-statements,broad-exception-caught
+
 from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
 import subprocess
 import sys
@@ -161,12 +162,9 @@ def convert_images(image_paths: Sequence[Path], output_path: Path, output_format
 
 def is_downloader_running(manga_name: str | None = None) -> bool:
     """Check across platforms if manga_downloader.py is currently active."""
-    query = "manga_downloader.py"
     if sys.platform == "win32":
         try:
-            filter_cmd = f"*manga_downloader.py*"
-            if manga_name:
-                filter_cmd = f"*{manga_name}*"
+            filter_cmd = f"*{manga_name}*" if manga_name else "*manga_downloader.py*"
             ps_cmd = (
                 f"Get-CimInstance Win32_Process | "
                 f"Where-Object {{ $_.CommandLine -like '{filter_cmd}' }} | "
@@ -177,6 +175,7 @@ def is_downloader_running(manga_name: str | None = None) -> bool:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
                 text=True,
+                check=False,
             )
             return bool(res.stdout.strip())
         except Exception:
@@ -189,6 +188,7 @@ def is_downloader_running(manga_name: str | None = None) -> bool:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
                 text=True,
+                check=False,
             )
             return bool(res.stdout.strip())
         except Exception:
@@ -297,7 +297,7 @@ def process_manga(
             return 0
         images = collect_images_from_folder(manga_dir, recursive=True)
         if images:
-            print(f"\n[{manga_name}] Generating single {ext.upper()} ({len(images)} images)...", flush=True)
+            print(f"\n[{manga_name}] Generating single {ext.upper()}...", flush=True)
             if convert_images(images, out_file, ext):
                 size_mb = out_file.stat().st_size / (1024 * 1024)
                 print(f"  [OK] Created {out_file.name} ({size_mb:.1f} MB)", flush=True)
@@ -327,14 +327,17 @@ def process_manga(
         known_mapping = mappings.get(mapping_key)
 
         if known_mapping:
-            print(f"\n[{manga_name}] Using predefined volume mapping ({len(known_mapping)} volumes)...", flush=True)
+            print(
+                f"\n[{manga_name}] Predefined volume mapping ({len(known_mapping)} volumes)...",
+                flush=True,
+            )
             volumes_to_process = known_mapping
         else:
             # Automatic grouping by chapters_per_volume
             chapter_numbers = [extract_first_number(d.name) for d in chapter_dirs]
             min_chap = min(chapter_numbers) if chapter_numbers else 1
             max_chap = max(chapter_numbers) if chapter_numbers else len(chapter_dirs)
-            
+
             volumes_to_process = []
             vol_idx = 1
             cur_start = min_chap
@@ -363,7 +366,7 @@ def process_manga(
 
             # In live monitoring mode, ensure the volume is fully downloaded
             if is_live:
-                has_next = (end_chap + 1) in chap_dir_map
+                has_next = bool(end_chap + 1 in chap_dir_map)
                 if not has_next:
                     # Still downloading this volume
                     continue
@@ -379,7 +382,8 @@ def process_manga(
                 continue
 
             print(
-                f"  Generating Volume {vol_num:02d} (Chapters {start_chap}-{end_chap}, {len(vol_images)} pages)...",
+                f"  Generating Volume {vol_num:02d} "
+                f"(Chapters {start_chap}-{end_chap}, {len(vol_images)} pages)...",
                 flush=True,
             )
             if convert_images(vol_images, out_file, ext):
@@ -531,7 +535,7 @@ def main() -> None:
                     )
                 if not active:
                     # Final pass when downloader finishes
-                    print("\nDownloader process is no longer running. Running final completion pass...")
+                    print("\nDownloader finished. Running final completion pass...")
                     for m_dir in manga_dirs:
                         process_manga(
                             m_dir,
