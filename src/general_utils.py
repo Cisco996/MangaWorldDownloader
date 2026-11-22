@@ -16,13 +16,13 @@ import aiohttp
 from aiohttp import ClientSession
 from bs4 import BeautifulSoup
 
-from .config import COOKIE_REGEX, FETCH_HEADERS, LINK_REGEX
+from .config import COOKIE_REGEX, FETCH_HEADERS, LINK_REGEX, TIMEOUT
 
 
 async def check_real_page(
     initial_response: BeautifulSoup,
     session: ClientSession,
-    timeout: int = 10,
+    timeout: int = TIMEOUT,
 ) -> BeautifulSoup:
     """Check if the provided response contains a redirect to a real page."""
     if (
@@ -50,7 +50,7 @@ async def check_real_page(
         # Perform the request
         async with session.get(
             link,
-            timeout=timeout,
+            timeout=aiohttp.ClientTimeout(total=timeout),
             cookies={cookie[0]: cookie[1]},
         ) as response:
             response.raise_for_status()
@@ -59,20 +59,23 @@ async def check_real_page(
     return initial_response
 
 
-async def fetch_page(url: str, timeout: int = 10) -> BeautifulSoup:
-    """Fetch the HTML content of a webpage."""
+async def fetch_page(url: str, timeout: int = TIMEOUT, retries: int = 3) -> BeautifulSoup:
+    """Fetch the HTML content of a webpage with retry support."""
     # Create a new session per worker
     async with aiohttp.ClientSession(headers=FETCH_HEADERS) as session:
-        try:
-            async with session.get(url, timeout=timeout) as response:
-                html = await response.text()
-                parsed_response = BeautifulSoup(html, "html.parser")
+        for attempt in range(retries):
+            try:
+                async with session.get(url, timeout=aiohttp.ClientTimeout(total=timeout)) as response:
+                    html = await response.text()
+                    parsed_response = BeautifulSoup(html, "html.parser")
 
-            return await check_real_page(parsed_response, session, timeout)
+                return await check_real_page(parsed_response, session, timeout)
 
-        except (aiohttp.ClientError, asyncio.TimeoutError):
-            logging.exception("Error fetching page %s", url)
-            sys.exit(1)
+            except (aiohttp.ClientError, asyncio.TimeoutError):
+                if attempt == retries - 1:
+                    logging.exception("Error fetching page %s after %d attempts", url, retries)
+                    sys.exit(1)
+                await asyncio.sleep(2)
 
 
 def validate_index_range(
@@ -88,12 +91,13 @@ def validate_index_range(
         if start_index < 1 or start_index > length:
             log_and_exit(f"Start index must be between 1 and {length}.")
 
+    if end_index:
+        if end_index < 1 or end_index > length:
+            log_and_exit(f"End index must be between 1 and {length}.")
+
     if start_index and end_index:
         if start_index > end_index:
-            log_and_exit("Start index cannot be greater than end episode.")
-
-        if start_index > length:
-            log_and_exit(f"End index must be between 1 and {length}.")
+            log_and_exit("Start index cannot be greater than end index.")
 
     start_index = start_index - 1 if start_index else 0
     end_index = end_index if end_index else length
@@ -109,4 +113,7 @@ def clear_terminal() -> None:
 
     command = commands.get(os.name)
     if command:
-        subprocess.run(command, shell=True, check=True)  # noqa: S603
+        try:
+            subprocess.run(command, shell=True, check=False)  # noqa: S603
+        except Exception:
+            pass

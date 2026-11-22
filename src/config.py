@@ -33,7 +33,7 @@ URL_FILENAME_REGEX = r"[^/]+\.[^/]+$"
 TASK_COLOR = "cyan"     # Color used for task-related output in the terminal.
 MAX_WORKERS = 4         # Maximum number of concurrent workers.
 CHUNK_SIZE = 16 * 1024  # Size of data chunks (bytes) to be processed at a time.
-TIMEOUT = 20            # Timeout value (seconds) for HTTP requests.
+TIMEOUT = 30            # Timeout value (seconds) for HTTP requests.
 MAX_RETRIES = 30        # Maximum number of retries for failed HTTP requests.
 WAIT_TIME_RETRIES = 10  # Number of seconds to wait between retries.
 NUM_URL_PATH_PARTS = 3  # Number of path segments to validate the initial URL.
@@ -68,6 +68,7 @@ HEADERS = {
         "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/117.0"
     ),
     "Connection": "keep-alive",
+    "Referer": "https://www.mangaworld.me/",
 }
 
 FETCH_HEADERS = {

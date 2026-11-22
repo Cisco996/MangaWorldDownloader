@@ -3,9 +3,9 @@
 This module provides high-level helpers to:
     - Retrieve chapter URLs and the corresponding number of pages.
     - Normalize chapter URLs depending on manga type (e.g., Manga, Manhwa).
-    - Extract the manga type from embedded script data.
-    - Fetch download links for individual chapter pages.
-    - Collect cleaned download links for multiple chapters.
+    - Extract the manga type from embedded metadata or script data.
+    - Fetch direct download links for chapter pages.
+    - Collect download links for multiple chapters.
 
 Intended to be used in combination with download utilities to provide a complete
 pipeline for scraping and downloading manga content.
@@ -34,70 +34,109 @@ from .config import (
 from .general_utils import check_real_page
 
 
-async def fetch_chapter_data(chapter_url: str, session: ClientSession) -> tuple:
-    """Fetch the number of pages for a given chapter URL, retrying if necessary."""
-    session.headers.update(FETCH_HEADERS)
+async def fetch_chapter_images(
+    chapter_url: str,
+    session: ClientSession,
+    manga_type: str | None = None,
+) -> list[str]:
+    """Fetch direct image URLs for all pages in a chapter."""
+    url_to_fetch = chapter_url
+    if manga_type and manga_type == "Manhwa" and "?style=list" not in url_to_fetch:
+        url_to_fetch = f"{url_to_fetch}?style=list"
+
     for attempt in range(MAX_RETRIES):
         try:
-            async with session.get(chapter_url, timeout=TIMEOUT) as response:
+            async with session.get(
+                url_to_fetch,
+                timeout=aiohttp.ClientTimeout(total=TIMEOUT),
+            ) as response:
                 soup = BeautifulSoup(await response.text(), "html.parser")
                 validated_soup = await check_real_page(soup, session, TIMEOUT)
-                page_item = validated_soup.find(
-                    "select", {"class": "page custom-select"},
-                )
-                if page_item:
-                    option_text = page_item.find("option").get_text()
-                    num_pages = option_text.rstrip("/").split("/")[-1]
-                    return chapter_url, num_pages  # Page count found
+
+                # Modern MangaWorld: all images are in <img class="reader-page">
+                img_items = validated_soup.find_all("img", class_="reader-page")
+                if not img_items:
+                    stage = validated_soup.find(class_="reader-stage")
+                    if stage:
+                        img_items = stage.find_all("img")
+                if not img_items:
+                    img_items = validated_soup.find_all(
+                        "img", attrs={"data-reader-image": True},
+                    )
+
+                image_urls = []
+                for img in img_items:
+                    src = img.get("src") or img.get("data-src")
+                    if src and not src.startswith("data:") and "/chapters/" in src:
+                        image_urls.append(src)
+
+                if image_urls:
+                    return image_urls
+
+                # Legacy fallback: single image with class img-fluid
+                legacy_imgs = validated_soup.find_all("img", {"class": "img-fluid"})
+                if legacy_imgs:
+                    return [legacy_imgs[-1]["src"]]
+
+                # Check if there is a page select
+                page_item = validated_soup.find("select", {"class": "page custom-select"})
+                if page_item and legacy_imgs:
+                    return [legacy_imgs[-1]["src"]]
 
         except (aiohttp.ClientError, asyncio.TimeoutError):
             pass
 
         if attempt < MAX_RETRIES - 1:
-            delay = random.uniform(1, WAIT_TIME_RETRIES - 1)  # noqa: S311
+            delay = random.uniform(1, min(WAIT_TIME_RETRIES, 3))  # noqa: S311
             await asyncio.sleep(delay)
 
-    logging.error("Failed to fetch chapter data for %s", chapter_url)
+    logging.error("Failed to fetch chapter images for %s", chapter_url)
+    return []
+
+
+async def fetch_chapter_data(chapter_url: str, session: ClientSession) -> tuple:
+    """Fetch the number of pages for a given chapter URL, retrying if necessary."""
+    session.headers.update(FETCH_HEADERS)
+    images = await fetch_chapter_images(chapter_url, session)
+    if images:
+        return chapter_url, str(len(images))
     return None, None
 
 
-async def get_chapter_urls_and_pages(
-    soup: BeautifulSoup,
-    session: ClientSession,
-) -> tuple:
-    """Extract chapter URLs and the corresponding number of pages."""
-    chapter_items = soup.find_all("a", {"class": "chap", "title": True})
-    tasks = []
+def extract_chapter_urls(soup: BeautifulSoup) -> list[str]:
+    """Extract chapter URLs from the manga page in ascending order."""
+    chapters_panel = soup.find(class_=re.compile(r"manga-chapters|chapters", re.I))
+    container = chapters_panel if chapters_panel else soup
 
-    # Create a list of tasks only for chapters that contain the match
-    for chapter_item in chapter_items:
-        chapter_url = chapter_item["href"]
-        if "/read/" in chapter_url:
-            tasks.append(fetch_chapter_data(chapter_url, session))
-
-    results = await asyncio.gather(*tasks)
-
-    # Filter out None results (failed requests) and unpack results
-    chapter_urls = []
-    pages_per_chapter = []
-
-    for result in results:
-        if result[0]:
-            chapter_urls.append(result[0])
-            pages_per_chapter.append(result[1])
-
-    # Return chapter URLs and pages, both in reverse order
-    return chapter_urls[::-1], pages_per_chapter[::-1]
-
-
-async def extract_chapters_info(soup: BeautifulSoup) -> tuple:
-    """Extract chapter URLs and page numbers."""
-    async with aiohttp.ClientSession() as session:
-        chapter_urls, pages_per_chapter = await get_chapter_urls_and_pages(
-            soup,
-            session,
+    chapter_items = container.find_all(
+        "a",
+        class_=lambda c: c and any(cls in {"ch", "chap"} for cls in c.split()),
+        href=re.compile(r"/read/"),
+    )
+    if not chapter_items:
+        chapter_items = container.find_all(
+            "a",
+            class_=lambda c: c and ("ch" in c or "chap" in c),
+            href=re.compile(r"/read/"),
         )
-        return chapter_urls, pages_per_chapter
+
+    seen = set()
+    chapter_urls = []
+    for item in chapter_items:
+        url = item.get("href")
+        if url and url not in seen and "/read/" in url:
+            seen.add(url)
+            chapter_urls.append(url)
+
+    # In MangaWorld, chapters are listed descending (latest chapter first).
+    # Reversing gives ascending order (Chapter 1 to Chapter N).
+    return chapter_urls[::-1]
+
+
+async def extract_chapters_info(soup: BeautifulSoup) -> tuple[list[str], list]:
+    """Extract chapter URLs from the manga page."""
+    chapter_urls = extract_chapter_urls(soup)
+    return chapter_urls, []
 
 
 def generate_chapter_url(chapter_url: str, manga_type: str) -> str | None:
@@ -105,8 +144,6 @@ def generate_chapter_url(chapter_url: str, manga_type: str) -> str | None:
     if manga_type in MANGA_LIKE:
         return f"{chapter_url}/1"
 
-    # Manhwa are paginated differently by default. The URL below adjusts it to behave
-    # like a Manga, displaying one image per page.
     if manga_type == "Manhwa":
         return chapter_url.replace("?style=list", "/1?style=pages")
 
@@ -118,34 +155,13 @@ async def fetch_download_link(
     chapter_url: str,
     session: ClientSession,
     manga_type: str | None = None,
-) -> str | None:
-    """Fetch the download link for the first image in a chapter page."""
-    if manga_type is None:
-        logging.warning("Manga type not found.")
-        return None
-
-    url_to_fetch = generate_chapter_url(chapter_url, manga_type)
-
-    for attempt in range(MAX_RETRIES):
-        try:
-            async with session.get(url_to_fetch, timeout=TIMEOUT) as response:
-                soup = BeautifulSoup(await response.text(), "html.parser")
-                validated_soup = await check_real_page(soup, session, TIMEOUT)
-                img_items = validated_soup.find_all("img", {"class": "img-fluid"})
-
-                # Download link found
-                if img_items:
-                    return img_items[-1]["src"]
-
-        except (aiohttp.ClientError, asyncio.TimeoutError):
-            pass
-
-        # Delay before retrying, but not after the last attempt
-        if attempt < MAX_RETRIES - 1:
-            delay = 1 + random.uniform(0, WAIT_TIME_RETRIES)  # noqa: S311
-            await asyncio.sleep(delay)
-
-    logging.error("Failed to fetch download link for %s", chapter_url)
+) -> list[str] | str | None:
+    """Fetch the download links or first image link for a chapter page."""
+    images = await fetch_chapter_images(chapter_url, session, manga_type=manga_type)
+    if images:
+        if len(images) > 1:
+            return images
+        return images[0]
     return None
 
 
@@ -153,45 +169,53 @@ async def extract_download_links(
     chapter_urls: list[str],
     start_index: int,
     end_index: int,
-    manga_type: str,
-) -> list[str]:
-    """Extract the download links for a list of chapter URLs."""
+    manga_type: str | None = None,
+) -> list:
+    """Extract download links for the selected range of chapter URLs."""
+    selected_urls = chapter_urls[start_index:end_index]
     async with aiohttp.ClientSession(headers=FETCH_HEADERS) as session:
         tasks = [
             fetch_download_link(chapter_url, session, manga_type=manga_type)
-            for chapter_url in chapter_urls
+            for chapter_url in selected_urls
         ]
+        results = await asyncio.gather(*tasks)
 
-        # Wait for all tasks to complete and filter out None values
-        download_links = await asyncio.gather(*tasks)
-
-        # Remove the suffix from each download link
-        return [
-            re.sub(FIRST_PAGE_SUFFIX_REGEX, "", download_link)
-            for download_link in download_links[start_index:end_index]
-            if download_link
-        ]
+        cleaned_results = []
+        for res in results:
+            if isinstance(res, list):
+                cleaned_results.append(res)
+            elif isinstance(res, str):
+                cleaned_results.append(re.sub(FIRST_PAGE_SUFFIX_REGEX, "", res))
+            else:
+                cleaned_results.append([])
+        return cleaned_results
 
 
 def extract_manga_type(soup: BeautifulSoup, manga_slug: str) -> str | None:
-    """Extract the type of manga (e.g., "Manga") from the page's script content."""
-    script_items = soup.find_all("script")
-    script_text = script_items[-1].get_text()
+    """Extract the type of manga (e.g., 'Manga', 'Manhwa') from the page."""
+    # 1. Search in DOM definition list (modern layout)
+    for dt in soup.find_all("dt"):
+        text = dt.get_text().strip().lower()
+        if "tipo" in text or "type" in text:
+            dd = dt.find_next_sibling("dd") or (dt.parent.find("dd") if dt.parent else None)
+            if dd:
+                manga_type = dd.get_text(strip=True)
+                if manga_type:
+                    return manga_type
 
-    # Build the regex pattern to find the manga data based on its slug
-    manga_slug_pattern = rf'"slug":"{manga_slug}".*?"typeT":\s*"[^"]*"'
-    slug_match = re.search(manga_slug_pattern, script_text)
+    # 2. Search in script tags
+    for script in soup.find_all("script"):
+        script_text = script.get_text()
+        if "typeT" in script_text:
+            manga_slug_pattern = rf'"slug":"{manga_slug}".*?"typeT":\s*"[^"]*"'
+            slug_match = re.search(manga_slug_pattern, script_text)
+            if slug_match:
+                type_match = re.search(MANGA_TYPE_REGEX, slug_match.group(0))
+                if type_match:
+                    return type_match.group(1)
 
-    # If the manga_slug is found, extract the part containing the typeT
-    if slug_match:
-        manga_slug_text = slug_match.group(0)
-        type_match = re.search(MANGA_TYPE_REGEX, manga_slug_text)
-
-        # Return the manga type if found, otherwise return None
-        if type_match:
-            return type_match.group(1)
-
-    return None
+    # 3. Default to Manga
+    return "Manga"
 
 
 def extract_volume_number(name: str) -> int:
@@ -203,7 +227,6 @@ def extract_volume_number(name: str) -> int:
 def extract_volume_info(soup: BeautifulSoup) -> list[dict]:
     """Extract the volume list and relative list of chapter URLs.
 
-    If a page doesn't contain volumes, it'll retrieve a volume with all chapters.
     Output:
         [
             {"name": "Volume 1", "chapters": [{"title": ..., "url": ...}, ...]},
@@ -211,40 +234,48 @@ def extract_volume_info(soup: BeautifulSoup) -> list[dict]:
         ]
     """
     volumes = []
-    volume_elements = soup.find_all("div", {"class": "volume-element"})
+    # Check modern volume elements first
+    volume_elements = soup.find_all("div", class_="volume")
+    if not volume_elements:
+        volume_elements = soup.find_all("div", {"class": "volume-element"})
 
     if volume_elements:
         for vol in volume_elements:
             # Volume name
-            name_tag = vol.find("p", {"class": "volume-name"})
+            name_tag = (
+                vol.find(class_="volume-name")
+                or vol.find("button", class_="volume-head")
+                or vol.find("p", class_="volume-name")
+            )
             volume_name = name_tag.get_text(strip=True) if name_tag else "Volume"
 
             # Volume chapters
             chapters = []
-            chapters_container = vol.find("div", {"class": "volume-chapters"})
-
-            if chapters_container:
-                chapter_divs = chapters_container.find_all("div", {"class": "chapter"})
-
-                for chap in chapter_divs:
-                    a_tag = chap.find("a", {"class": "chap"}, title=True)
-                    if a_tag:
-                        chapters.append(
-                            {
-                                "title": a_tag["title"],
-                                "url": a_tag["href"],
-                            },
-                        )
-
-            if chapters:
-                volumes.append(
-                    {
-                        "name": volume_name,
-                        "chapters": sorted(chapters, key=lambda chap: chap["title"]),
-                    },
+            chap_links = vol.find_all(
+                "a",
+                class_=lambda c: c and any(cls in {"ch", "chap"} for cls in c.split()),
+                href=re.compile(r"/read/"),
+            )
+            if not chap_links:
+                chap_links = vol.find_all(
+                    "a",
+                    class_=lambda c: c and ("ch" in c or "chap" in c),
+                    href=re.compile(r"/read/"),
                 )
+
+            for chap in chap_links:
+                title = chap.get("title") or chap.get_text(strip=True)
+                url = chap.get("href")
+                if url:
+                    chapters.append({"title": title, "url": url})
+
+            # In DOM, chapters inside a volume are in descending order
+            if chapters:
+                volumes.append({
+                    "name": volume_name,
+                    "chapters": chapters[::-1],
+                })
     else:
-        # No available volumes
         logging.error("The selected link doesn't have available volumes.")
         return []
 

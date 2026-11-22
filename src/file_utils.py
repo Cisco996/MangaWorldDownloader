@@ -11,7 +11,10 @@ from .config import DOWNLOAD_FOLDER
 
 def read_file(filename: str) -> list[str]:
     """Read the contents of a file and returns a list of its lines."""
-    with Path(filename).open("r", encoding="utf-8") as file:
+    path = Path(filename)
+    if not path.exists():
+        return []
+    with path.open("r", encoding="utf-8") as file:
         return file.read().splitlines()
 
 
